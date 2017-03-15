@@ -1,185 +1,243 @@
-﻿//Benvenuti Filippo 4F MainWindow
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Navigation;
+using System.Windows.Shapes;
 using System.Net;
 using System.Net.Sockets;
 
-namespace BattagliaNavale
+namespace Battleship
 {
     /// <summary>
     /// Interaction logic for MainWindow.xaml
     /// </summary>
     public partial class MainWindow : Window
     {
+        //Boolean singlePlayer = true;
 
-        Arena _arena1;
-        Arena _arena2;
-
-        string _nome1;
-        string _nome2;
-
-        Task agg;
+        bool opsNotInitialized = true;//OnlinePlaySetup
+        
         Socket socket;
-        IPAddress ip;
-
-        bool giocoIo = false;
+        Task UDP;
+        EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
+        IPAddress remote_address;
+        IPEndPoint remote_endpoint;
+        bool ready = false;
+        bool ready2 = false;
 
         public MainWindow()
         {
-            _arena1 = new Arena();
-            _arena2 = new Arena();
+            InitializeComponent();
 
-            agg = new Task(() => Aggiorna());
+            UDP = new Task(() => UDPmessage());
             socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 
-            IPAddress local_address = IPAddress.Any;//Any è come dare Null
-            IPEndPoint local_endpoint = new IPEndPoint(local_address.MapToIPv4(), 55000);//Creo Local endpoint che sarei io 
+            IPAddress local_address = IPAddress.Any;
+            IPEndPoint local_endpoint = new IPEndPoint(local_address.MapToIPv4(), 55000);
 
-            socket.Bind(local_endpoint);//Metodo Bind associa local endpoint 
-            agg.Start();
+            socket.Bind(local_endpoint);
+            UDP.Start();
 
+            lblLocalIP.Content = ("Local IP Address: " + GetLocalIPAddress());
         }
+
         
-        /// <summary>
-        /// Posiziona le navi1
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void btnPosiziona1_Click(object sender, RoutedEventArgs e)
-        {
-            _nome1 = txtNome1.Text;
-            ip = IPAddress.Parse(txtIP.Text);
-            PosizionaNavi posNavi = new PosizionaNavi(_arena1, ip, socket);
-            posNavi.Show();
-            btnPosiziona1.IsEnabled = false;
-        }
 
-        /// <summary>
-        /// Gioca la partita
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void btnGioca1_Click(object sender, RoutedEventArgs e)
+        private void btnHide (object sender, RoutedEventArgs e)
         {
-            btnGioca1.IsEnabled = false;
-            Gioca gioco = new Gioca(_arena1, _arena2, ip, socket);
-            gioco.Show();
-            if (_arena2.FlottaKO())
+            Button button = (Button)sender;
+            button.Visibility = Visibility.Hidden;
+            if (button.Name == "btnLocalPlay") btnOnlinePlay.IsEnabled = false;
+            if (button.Name == "btnOnlinePlay") btnLocalPlay.IsEnabled = false;
+            btnBack.Visibility = Visibility.Visible;
+            if(button.Name == "btnLocalPlay")
             {
-                MessageBox.Show("LA SQUADRA " + _nome1 + " HA VINTO!!!", "VITTORIA", MessageBoxButton.OK, MessageBoxImage.Information);
-                btnGioca1.IsEnabled = false;
+                txtPlayer1Name.IsEnabled = true;
+                txtPlayer2Name.IsEnabled = true;
+                btnStartLocal.IsEnabled = true;
+                txtPlayer1Name.Focus();
             }
-            if(_arena1.FlottaKO())
+            if (button.Name == "btnOnlinePlay")
             {
-                MessageBox.Show("LA SQUADRA " + _nome2 + " HA VINTO!!!\n\n(hai perso)", "VITTORIA", MessageBoxButton.OK, MessageBoxImage.Information);
+                if (opsNotInitialized)
+                {
+
+                    opsNotInitialized = false;
+                    string[] ip = GetLocalIPAddress().Split('.');
+                    string name = ip[3];
+                    txtOPlayerName.Text = ("Player " + name);
+                    txtIP.Text = (ip[0] + "." + ip[1] + "." + ip[2] + "." + 0);
+                }
             }
         }
-        
-        /// <summary>
-        /// Gestione ricevimento dati e aggiornamento
-        /// </summary>
-        private void Aggiorna()
+
+        private void btnStartLocal_Click(object sender, RoutedEventArgs e)
         {
+            //singlePlayer = true;
+            ShipPlacement battleFieldSetup = new ShipPlacement(txtPlayer1Name.Text, txtPlayer2Name.Text);
+            battleFieldSetup.Show();
+            this.Close();
+        }
+
+        private void btnBack_Click(object sender, RoutedEventArgs e)
+        {
+            Button button = sender as Button;
+            button.Visibility = Visibility.Hidden;
+            btnLocalPlay.Visibility = Visibility.Visible;
+            btnOnlinePlay.Visibility = Visibility.Visible;
+            btnLocalPlay.IsEnabled = true;
+            btnOnlinePlay.IsEnabled = true;
+            txtPlayer1Name.Text = "Player 1";
+            txtPlayer2Name.Text = "Player 2";
+
+            txtPlayer1Name.IsEnabled = false;
+            txtPlayer2Name.IsEnabled = false;
+            btnStartLocal.IsEnabled = false;
+        }
+
+        private void txtPlayer_GotFocus(object sender, RoutedEventArgs e)
+        {
+            TextBox txt = sender as TextBox;
+            txt.SelectAll();
+        }
+
+        private void btnStartOnline_Click(object sender, RoutedEventArgs e)
+        {
+            //TODO: delete this
+        }
+
+        private void btnReady_Click(object sender, RoutedEventArgs e)
+        {
+            if (!ready2)
+            {
+                UDPSendData("syncronize|request");
+                ready = true;
+                return;
+            }
+            UDPSendData("syncronize|reply|" + txtOPlayerName.Text);
+            ready = true;
+        }
+
+
+
+
+        
+        private void UDPSendData(string data)
+        {
+            remote_address = IPAddress.Parse(txtIP.Text);
+            remote_endpoint = new IPEndPoint(remote_address, 55000);
+
+            byte[] messaggio = Encoding.UTF8.GetBytes(data);
+
+            socket.SendTo(messaggio, remote_endpoint);
+        }
+
+
+        public static string GetLocalIPAddress()
+        {
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (var ip in host.AddressList)
+            {
+                if (ip.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    return ip.ToString();
+                }
+            }
+            throw new Exception("Local IP Address Not Found!");
+        }
+
+        /// <summary>
+        /// Task which checks indefinetly for data.
+        /// </summary>
+        private void UDPmessage()
+        {
+            
+            string playerName = txtOPlayerName.Text;
             int nBytes = 0;
             while (true)
                 if ((nBytes = socket.Available) > 0)
                 {
                     byte[] buffer = new byte[nBytes];//ricezione caratteri 
 
-                    EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
-
                     nBytes = socket.ReceiveFrom(buffer, ref remoteEndPoint);//riferimento del messaggio 
 
                     string from = ((IPEndPoint)remoteEndPoint).Address.ToString();//Recupero dell'address di chi mi invia messaggi
-
                     string message = Encoding.UTF8.GetString(buffer, 0, nBytes);
 
-                    //TODO: Gestire ricevimento dati
-
+                    
                     string[] dati = message.Split('|');
-                  //  MessageBox.Show(message);
+                    //  MessageBox.Show(message);
                     switch (dati[0])
                     {
-                        case "FUOCO":
-                            if (dati[1] == "fine")
+                        case "hit":
+                            if (dati[1] == "end")
                             {
                                 Dispatcher.Invoke(() =>
                                 {
-                                    btnGioca1.IsEnabled = true;
+                                    //here goes code that enables the grid of the player who recieved this message.
                                 });
                             }
                             else
                             {
-                                _arena1.Fuoco(int.Parse(dati[1]), int.Parse(dati[2]));
+                                //hit ship at x, y ([0], [1]) of user on this end 
                             }
                             break;
 
-                        case "POSIZ":
-                            if (dati[1] == "fine")
+                        case "pos":
+                            if (dati[1] == "end")
                             {
                                 Dispatcher.Invoke(() =>
                                 {
-                                    btnGioca1.IsEnabled = giocoIo;
+                                    // btnGioca1.IsEnabled = giocoIo;
                                 });
                             }
                             else
                             {
-                                _arena2.InserisciNave(new Nave(int.Parse(dati[1]), int.Parse(dati[2]), bool.Parse(dati[3]), int.Parse(dati[4])));
+                                //   _arena2.InserisciNave(new Nave(int.Parse(dati[1]), int.Parse(dati[2]), bool.Parse(dati[3]), int.Parse(dati[4])));
                             }
                             break;
-
-                        case "SYNCRO":
+                            //TODO: check syncronize spelling
+                        case "syncronize":
                             if (dati[1] == "request")
                             {
-                                IPAddress remote_address = ip;
-                                IPEndPoint remote_endpoint = new IPEndPoint(remote_address, 55000);
-                                byte[] response = Encoding.UTF8.GetBytes("SYNCRO|response");
-                                socket.SendTo(response, remote_endpoint);
+                                //Wait for this person to hit ready
+                                ready2 = true;
+                                while (!ready) { }
+                                UDPSendData("syncronize|reply|" + playerName);
                             }
-                            if (dati[1] == "response")
+                            if (dati[1] == "reply")
                             {
-                                giocoIo = true;
                                 Dispatcher.Invoke(() =>
                                 {
-                                    btnPosiziona1.IsEnabled = true;
+                                    ShipPlacement battleFieldSetup = new ShipPlacement(playerName, dati[2]);
+                                    battleFieldSetup.Show();
+                                    this.Hide();
                                 });
-                                IPAddress remote_address = ip;
-                                IPEndPoint remote_endpoint = new IPEndPoint(remote_address, 55000);
-                                byte[] response = Encoding.UTF8.GetBytes("SYNCRO|ok");
-                                socket.SendTo(response, remote_endpoint);
+
+                                UDPSendData("syncronize|ok|" + playerName);
                             }
-                            if(dati[1] == "ok")
+                            if (dati[1] == "ok")
                             {
                                 Dispatcher.Invoke(() =>
                                 {
-                                    btnPosiziona1.IsEnabled = true;
+                                    ShipPlacement battleFieldSetup = new ShipPlacement(playerName, dati[2]);
+                                    battleFieldSetup.Show();
+                                    this.Hide();
                                 });
                             }
                             break;
                     }
                 }
-        }
 
-        /// <summary>
-        /// Sincronizza i due giocatori
-        /// </summary>
-        /// <param name="sender"></param>
-        /// <param name="e"></param>
-        private void btnSyncro_Click(object sender, RoutedEventArgs e)
-        {
-            IPAddress remote_address = ip;
-            IPEndPoint remote_endpoint = new IPEndPoint(remote_address, 55000);
-
-            byte[] message = Encoding.UTF8.GetBytes("SYNCRO|request");
-
-            socket.SendTo(message, remote_endpoint);
-        }
-
-        private void txtIP_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            IPAddress.TryParse(txtIP.Text, out ip);
         }
     }
 }
